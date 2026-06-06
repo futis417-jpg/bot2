@@ -10,7 +10,7 @@ from config import bot, SUPER_ADMIN_ID, ADMIN_LINK, db_lock
 # ========================================================
 # CONFIGURACIÓN AUTOMÁTICA DESDE RENDER / GITHUB
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
-GITHUB_REPO = "futis417-jpg/mi-db-bot"  # Asegúrate de que el nombre del repo coincide
+GITHUB_REPO = "futis417-jpg/mi-bot-db"
 GITHUB_FILE = "database.json"
 # ========================================================
 
@@ -20,8 +20,12 @@ HEADERS = {
     "Accept": "application/vnd.github.v3+json"
 }
 
+# Memoria caché global para evitar pérdidas de datos entre consultas rápidas de Telebot
+_LOCAL_CACHE = None
+
 def init_db():
-    """Lee la base de datos de GitHub y genera perfiles de emergencia para evitar KeyErrors."""
+    """Lee la base de datos de GitHub, sincroniza la caché y blinda los perfiles de usuario."""
+    global _LOCAL_CACHE
     with db_lock:
         default_db = {
             'cookies_list': [], 'admins': [str(SUPER_ADMIN_ID), int(SUPER_ADMIN_ID)], 'maintenance_mode': False,
@@ -33,29 +37,41 @@ def init_db():
             }
         }
         
+        # Intentar descargar de GitHub
         try:
-            response = requests.get(URL_API, headers=HEADERS)
+            response = requests.get(URL_API, headers=HEADERS, timeout=10)
             if response.status_code == 200:
                 datos_recurso = response.json()
                 contenido_b64 = datos_recurso['content']
                 contenido_json = base64.b64decode(contenido_b64).decode('utf-8')
                 db = json.loads(contenido_json)
+                _LOCAL_CACHE = db  # Actualizar caché interna
+            else:
+                if _LOCAL_CACHE is not None:
+                    db = _LOCAL_CACHE
+                else:
+                    db = default_db
+        except Exception as e:
+            print(f"Error de conexión con GitHub: {e}")
+            if _LOCAL_CACHE is not None:
+                db = _LOCAL_CACHE
             else:
                 db = default_db
-        except Exception as e:
-            print(f"Error cargando DB desde GitHub: {e}")
-            db = default_db
 
-        # Asegurar que existan todas las estructuras base
+        # Asegurar estructuras base obligatorias
         for key in default_db:
-            if key not in db: db[key] = default_db[key]
+            if key not in db: 
+                db[key] = default_db[key]
         
+        # Normalizar administradores
         db['admins'] = list(set([str(a) for a in db.get('admins', [])] + [int(a) for a in db.get('admins', []) if str(a).isdigit()]))
+        if str(SUPER_ADMIN_ID) not in db['admins']: db['admins'].append(str(SUPER_ADMIN_ID))
+        if int(SUPER_ADMIN_ID) not in db['admins']: db['admins'].append(int(SUPER_ADMIN_ID))
 
-        # Limpiar y parsear perfiles existentes
+        # Re-indexar y limpiar perfiles (Compatibilidad absoluta str e int)
         profiles_limpios = {}
         for uid, profile in list(db.get('user_profiles', {}).items()):
-            if not profile: continue
+            if not profile or profile == "None": continue
             if 'plan' not in profile: profile['plan'] = 'free'
             if 'vip_expiry' not in profile: profile['vip_expiry'] = None
             if 'daily_activations' not in profile: profile['daily_activations'] = 0
@@ -66,45 +82,51 @@ def init_db():
             profiles_limpios[str(uid)] = profile
             profiles_limpios[int(uid)] = profile
         
-        # 🚨 PARCHE DEFINITIVO: Si tu ID de Super Admin no está en el JSON, crearlo de emergencia
-        # Esto evita que 'user_handlers.py' rompa al intentar leer tu menú de referidos.
-        for admin_id in [str(SUPER_ADMIN_ID), int(SUPER_ADMIN_ID)]:
-            if admin_id not in profiles_limpios:
-                perfil_admin = {
+        # INYECCIÓN FORZOSA DE SEGURIDAD PARA TU ID (Evita cualquier KeyError de raíz)
+        for mi_id in [str(SUPER_ADMIN_ID), int(SUPER_ADMIN_ID)]:
+            if mi_id not in profiles_limpios:
+                perfil_raiz = {
                     'first_seen': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                    'username': "Admin",
-                    'first_name': "Creador",
+                    'username': "izi_1244",
+                    'first_name': "Ishak",
                     'activations': 0,
-                    'plan': 'vip',  # Te ponemos VIP directamente por ser el dueño
+                    'plan': 'vip',
                     'daily_activations': 0,
                     'last_reset_date': datetime.now().strftime("%Y-%m-%d"),
                     'vip_expiry': "2036-01-01 00:00:00",
                     'referrals': 0,
                     'bonus_daily': 0
                 }
-                profiles_limpios[str(SUPER_ADMIN_ID)] = perfil_admin
-                profiles_limpios[int(SUPER_ADMIN_ID)] = perfil_admin
-        
+                profiles_limpios[str(SUPER_ADMIN_ID)] = perfil_raiz
+                profiles_limpios[int(SUPER_ADMIN_ID)] = perfil_raiz
+
         db['user_profiles'] = profiles_limpios
+        _LOCAL_CACHE = db
         return db
 
 def save_db(db_data):
-    """Limpia los IDs duplicados e hilos antes de subir el archivo a GitHub."""
+    """Limpia las claves duplicadas de la memoria RAM y sube los cambios de forma síncrona y robusta."""
+    global _LOCAL_CACHE
     with db_lock:
         try:
-            db_to_save = dict(db_data)
+            # Sincronizar inmediatamente la caché local para que los hilos la lean al instante
+            _LOCAL_CACHE = db_data
             
-            # Limpiar perfiles para que en GitHub solo queden guardados como String (formato estándar JSON)
-            if 'user_profiles' in db_to_save:
-                profiles_clean = {}
-                for uid, profile in db_to_save['user_profiles'].items():
-                    profiles_clean[str(uid)] = profile
-                db_to_save['user_profiles'] = profiles_clean
-                
-            if 'admins' in db_to_save:
-                db_to_save['admins'] = list(set([str(a) for a in db_to_save['admins']]))
+            # Crear copia limpia para exportar a GitHub (el estándar JSON solo acepta strings como llaves)
+            db_to_save = {}
+            for k, v in db_data.items():
+                if k == 'user_profiles':
+                    profiles_clean = {}
+                    for uid, prof in v.items():
+                        profiles_clean[str(uid)] = prof
+                    db_to_save[k] = profiles_clean
+                elif k == 'admins':
+                    db_to_save[k] = list(set([str(a) for a in v]))
+                else:
+                    db_to_save[k] = v
             
-            response = requests.get(URL_API, headers=HEADERS)
+            # Obtener el SHA de GitHub de forma segura antes de machacar el archivo
+            response = requests.get(URL_API, headers=HEADERS, timeout=10)
             sha = ""
             if response.status_code == 200:
                 sha = response.json()['sha']
@@ -118,9 +140,11 @@ def save_db(db_data):
                 "sha": sha
             }
             
-            requests.put(URL_API, headers=HEADERS, json=payload)
+            res_put = requests.put(URL_API, headers=HEADERS, json=payload, timeout=15)
+            if res_put.status_code not in [200, 201]:
+                print(f"Alerta API GitHub al guardar: {res_put.status_code}")
         except Exception as e:
-            print(f"Error guardando DB en GitHub: {e}")
+            print(f"Error crítico en save_db hacia GitHub: {e}")
 
 def is_admin(user_id):
     db = init_db()
