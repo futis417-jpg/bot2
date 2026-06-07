@@ -21,6 +21,42 @@ def admin_panel_start(message):
     db = init_db()
     bot.send_message(message.chat.id, "👑 **CENTRO DE MANDOS KANT FLIX** 👑", reply_markup=admin_panel_keyboard(db), parse_mode="Markdown")
 
+@bot.message_handler(commands=['activaciones'])
+def command_all_activations(message):
+    if not is_admin(message.from_user.id): return
+    db = init_db()
+    profiles = db.get('user_profiles', {})
+    
+    # Ordenamos a todos los usuarios por su número de activaciones (de mayor a menor)
+    sorted_users = sorted(profiles.items(), key=lambda x: x[1].get('activations', 0), reverse=True)
+    
+    texto_actual = "📈 **LISTA GLOBAL DE ACTIVACIONES POR USUARIO** 📈\n\n"
+    count_cero = 0
+    
+    bot.send_message(message.chat.id, "📊 Generando reporte completo de todos los usuarios... Esto puede tomar un segundo.", parse_mode="Markdown")
+    
+    for i, (uid, prof) in enumerate(sorted_users):
+        acts = prof.get('activations', 0)
+        if acts > 0:
+            linea = f"👤 @{prof.get('username','N/A')} (`{uid}`) ➔ **{acts} activaciones**\n"
+            
+            # Telegram tiene un límite de ~4096 caracteres. Partimos el mensaje si es muy largo.
+            if len(texto_actual) + len(linea) > 3800:
+                bot.send_message(message.chat.id, texto_actual, parse_mode="Markdown")
+                texto_actual = linea
+            else:
+                texto_actual += linea
+        else:
+            count_cero += 1
+            
+    if count_cero > 0:
+        texto_actual += f"\n_... además hay {count_cero} usuarios registrados que aún tienen 0 activaciones._"
+         
+    if texto_actual.strip() == "📈 **LISTA GLOBAL DE ACTIVACIONES POR USUARIO** 📈":
+        texto_actual += "\n_Ningún usuario ha activado nada aún._"
+        
+    bot.send_message(message.chat.id, texto_actual, parse_mode="Markdown")
+
 @bot.callback_query_handler(func=lambda call: call.data.startswith("admin_"))
 def admin_callbacks(call):
     if not is_admin(call.from_user.id): return
@@ -38,7 +74,7 @@ def admin_callbacks(call):
         elif call.data == "admin_edit_plan_free":
             msg = bot.send_message(call.message.chat.id, "✏️ Envía el **NUEVO NÚMERO** de usos al día para GRATIS:")
             bot.register_next_step_handler(msg, lambda m: _edit_plan_limit(m, 'free'))
-            
+
         elif call.data == "admin_edit_plan_vip":
             msg = bot.send_message(call.message.chat.id, "✏️ Envía el **NUEVO NÚMERO** de usos al día para VIP:")
             bot.register_next_step_handler(msg, lambda m: _edit_plan_limit(m, 'vip'))
@@ -84,7 +120,7 @@ def admin_callbacks(call):
                 markup.add(InlineKeyboardButton(f"ID: {admin_id}", callback_data="noop"), InlineKeyboardButton("❌ Quitar", callback_data=f"del_admin_{admin_id}"))
             markup.add(InlineKeyboardButton("➕ Añadir Nuevo Admin", callback_data="add_new_admin"))
             bot.edit_message_text(chat_id=call.message.chat.id, message_id=call.message.message_id, text="👥 **Gestión de Administradores**", reply_markup=markup, parse_mode="Markdown")
-            
+
         elif call.data == "admin_top_refs":
             profiles = db.get('user_profiles', {})
             sorted_users = sorted(profiles.items(), key=lambda x: x[1].get('referrals', 0), reverse=True)[:10]
@@ -94,6 +130,52 @@ def admin_callbacks(call):
                     texto += f"{i+1}. @{prof.get('username','N/A')} - **{prof.get('referrals')} invitados**\n"
             if texto == "🏆 **TOP 10 REFERIDORES** 🏆\n\n": texto += "_Nadie ha invitado a nadie aún._"
             bot.edit_message_text(chat_id=call.message.chat.id, message_id=call.message.message_id, text=texto, reply_markup=admin_panel_keyboard(db), parse_mode="Markdown")
+
+        # Muestra el historial COMPLETO de activaciones
+        elif call.data == "admin_top_acts":
+            bot.answer_callback_query(call.id, "📊 Recopilando historial completo de activaciones de cada usuario...")
+            profiles = db.get('user_profiles', {})
+            
+            # Ordenamos a CADA usuario por sus activaciones
+            sorted_users = sorted(profiles.items(), key=lambda x: x[1].get('activations', 0), reverse=True)
+            
+            texto_base = "📈 **REPORTE COMPLETO DE ACTIVACIONES** 📈\n\n"
+            texto_actual = texto_base
+            mensajes_enviados = 0
+            count_cero = 0
+            hay_activaciones = False
+            
+            for i, (uid, prof) in enumerate(sorted_users):
+                acts = prof.get('activations', 0)
+                if acts > 0:
+                    hay_activaciones = True
+                    linea = f"{i+1}. @{prof.get('username','N/A')} (ID: `{uid}`) - **{acts} activaciones**\n"
+                    
+                    # Prevención de crasheos: si el texto es muy largo, lo envía y crea otro nuevo
+                    if len(texto_actual) + len(linea) > 3800:
+                        if mensajes_enviados == 0:
+                            bot.edit_message_text(chat_id=call.message.chat.id, message_id=call.message.message_id, text=texto_actual, parse_mode="Markdown")
+                        else:
+                            bot.send_message(call.message.chat.id, texto_actual, parse_mode="Markdown")
+                        texto_actual = linea
+                        mensajes_enviados += 1
+                    else:
+                        texto_actual += linea
+                else:
+                    count_cero += 1
+            
+            if not hay_activaciones:
+                texto_actual += "_Nadie ha activado nada aún._\n"
+            
+            # Resumen elegante de usuarios sin activaciones
+            if count_cero > 0:
+                texto_actual += f"\n_... y {count_cero} usuarios que aún tienen 0 activaciones._"
+                
+            # Enviamos el fragmento final
+            if mensajes_enviados == 0:
+                bot.edit_message_text(chat_id=call.message.chat.id, message_id=call.message.message_id, text=texto_actual, reply_markup=admin_panel_keyboard(db), parse_mode="Markdown")
+            else:
+                bot.send_message(call.message.chat.id, texto_actual, reply_markup=admin_panel_keyboard(db), parse_mode="Markdown")
 
         elif call.data == "admin_broadcast":
             msg = bot.send_message(call.message.chat.id, "📢 Envía el mensaje que le llegará a TODOS los usuarios:")
@@ -105,11 +187,12 @@ def admin_callbacks(call):
                     bot.send_document(call.message.chat.id, doc, caption="💾 Backup BD Actual")
                     
         elif call.data == "admin_export_users":
+            # Exporta los datos de usuario a un archivo incluyendo activaciones
             with open('users_export.txt', 'w', encoding='utf-8') as f:
-                f.write("ID | Username | Nombre | Plan | Ref | Fecha Ingreso\n")
-                f.write("-" * 75 + "\n")
+                f.write("ID | Username | Nombre | Plan | Ref | Activaciones | Fecha Ingreso\n")
+                f.write("-" * 90 + "\n")
                 for uid, p in db['user_profiles'].items():
-                    f.write(f"{uid} | @{p.get('username','N/A')} | {p.get('first_name','N/A')} | {p.get('plan')} | {p.get('referrals')} | {p.get('first_seen')}\n")
+                    f.write(f"{uid} | @{p.get('username','N/A')} | {p.get('first_name','N/A')} | {p.get('plan')} | {p.get('referrals')} | {p.get('activations', 0)} | {p.get('first_seen')}\n")
             with open('users_export.txt', 'rb') as doc:
                 bot.send_document(call.message.chat.id, doc, caption="📄 Lista Completa de Usuarios")
             os.remove('users_export.txt')
@@ -163,7 +246,15 @@ def process_manage_user(message):
     uid = message.text.strip()
     db = init_db()
     if uid in db['user_profiles']:
-        msg = bot.reply_to(message, f"👤 Usuario @{db['user_profiles'][uid].get('username')}.\n\nEscribe `VIP 30` para darle 30 días VIP.\nEscribe `FREE` para quitarle el VIP.")
+        # Muestra las activaciones de este usuario
+        user_data = db['user_profiles'][uid]
+        acts = user_data.get('activations', 0)
+        
+        texto = f"👤 Usuario @{user_data.get('username')}.\n"
+        texto += f"📈 **Activaciones totales hechas por este usuario:** {acts}\n\n"
+        texto += "Escribe `VIP 30` para darle 30 días VIP.\nEscribe `FREE` para quitarle el VIP."
+        
+        msg = bot.reply_to(message, texto, parse_mode="Markdown")
         bot.register_next_step_handler(msg, lambda m: process_manage_user_action(m, uid))
     else:
         bot.reply_to(message, "❌ ID no encontrada.")
