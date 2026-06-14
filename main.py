@@ -5,6 +5,7 @@ from config import app, bot
 import database
 import user_handlers  # No borrar: Importante para registrar los manejadores de usuario
 import admin_handlers  # No borrar: Importante para registrar los manejadores del admin
+import reseller_handlers # NUEVO: Activa el panel de revendedores
 
 @app.route('/')
 def home():
@@ -18,6 +19,8 @@ if __name__ == "__main__":
     database.init_db()
     # Ejecutamos el servidor Web de Flask en un hilo independiente
     threading.Thread(target=run_web_server, daemon=True).start()
+    
+    print("🚀 Bot iniciado correctamente con sistema Reseller activo...")
     
     # Bucle infinito del Bot con control de fallos automático
     while True:
