@@ -11,8 +11,16 @@ from database import init_db, save_db, is_admin
 import utils
 from utils import auto_repair_system, generate_coupon_code, parse_netscape_cookies
 import keyboards
-from keyboards import admin_panel_keyboard, admin_plans_keyboard, admin_reseller_keyboard
+from keyboards import admin_panel_keyboard, admin_reseller_keyboard
 from playwright_service import background_check_cookies, background_spy
+
+# Función para el teclado de planes (movida aquí para evitar el ImportError)
+def admin_plans_keyboard(db):
+    markup = InlineKeyboardMarkup()
+    markup.add(InlineKeyboardButton("✏️ Editar Límite Gratis", callback_data="admin_edit_plan_free"))
+    markup.add(InlineKeyboardButton("✏️ Editar Límite VIP", callback_data="admin_edit_plan_vip"))
+    markup.add(InlineKeyboardButton("🔙 Volver", callback_data="admin_back_panel"))
+    return markup
 
 @bot.message_handler(commands=['admin'])
 @bot.message_handler(func=lambda m: m.text == "👑 Panel Admin")
@@ -26,14 +34,19 @@ def command_all_activations(message):
     if not is_admin(message.from_user.id): return
     db = init_db()
     profiles = db.get('user_profiles', {})
+    
     sorted_users = sorted(profiles.items(), key=lambda x: x[1].get('activations', 0), reverse=True)
+    
     texto_actual = "📈 **LISTA GLOBAL DE ACTIVACIONES POR USUARIO** 📈\n\n"
     count_cero = 0
+    
     bot.send_message(message.chat.id, "📊 Generando reporte completo de todos los usuarios... Esto puede tomar un segundo.", parse_mode="Markdown")
+    
     for i, (uid, prof) in enumerate(sorted_users):
         acts = prof.get('activations', 0)
         if acts > 0:
             linea = f"👤 @{prof.get('username','N/A')} (`{uid}`) ➔ **{acts} activaciones**\n"
+            
             if len(texto_actual) + len(linea) > 3800:
                 bot.send_message(message.chat.id, texto_actual, parse_mode="Markdown")
                 texto_actual = linea
@@ -41,16 +54,20 @@ def command_all_activations(message):
                 texto_actual += linea
         else:
             count_cero += 1
+            
     if count_cero > 0:
         texto_actual += f"\n_... además hay {count_cero} usuarios registrados que aún tienen 0 activaciones._"
+         
     if texto_actual.strip() == "📈 **LISTA GLOBAL DE ACTIVACIONES POR USUARIO** 📈":
         texto_actual += "\n_Ningún usuario ha activado nada aún._"
+        
     bot.send_message(message.chat.id, texto_actual, parse_mode="Markdown")
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("admin_"))
 def admin_callbacks(call):
     if not is_admin(call.from_user.id): return
     db = init_db()
+    
     try:
         if call.data == "admin_create_coupon":
             msg = bot.send_message(call.message.chat.id, "🎟️ ¿Cuántos **DÍAS VIP** otorgará este cupón? (Ej: 30)")
@@ -121,30 +138,45 @@ def admin_callbacks(call):
             bot.edit_message_text(chat_id=call.message.chat.id, message_id=call.message.message_id, text=texto, reply_markup=admin_panel_keyboard(db), parse_mode="Markdown")
 
         elif call.data == "admin_top_acts":
-            bot.answer_callback_query(call.id, "📊 Recopilando historial...")
+            bot.answer_callback_query(call.id, "📊 Recopilando historial completo de activaciones de cada usuario...")
             profiles = db.get('user_profiles', {})
+            
             sorted_users = sorted(profiles.items(), key=lambda x: x[1].get('activations', 0), reverse=True)
-            texto_base = "📈 **REPORTE DE ACTIVACIONES** 📈\n\n"
+            
+            texto_base = "📈 **REPORTE COMPLETO DE ACTIVACIONES** 📈\n\n"
             texto_actual = texto_base
             mensajes_enviados = 0
             count_cero = 0
             hay_activaciones = False
+            
             for i, (uid, prof) in enumerate(sorted_users):
                 acts = prof.get('activations', 0)
                 if acts > 0:
                     hay_activaciones = True
                     linea = f"{i+1}. @{prof.get('username','N/A')} (ID: `{uid}`) - **{acts} activaciones**\n"
+                    
                     if len(texto_actual) + len(linea) > 3800:
-                        if mensajes_enviados == 0: bot.edit_message_text(chat_id=call.message.chat.id, message_id=call.message.message_id, text=texto_actual, parse_mode="Markdown")
-                        else: bot.send_message(call.message.chat.id, texto_actual, parse_mode="Markdown")
+                        if mensajes_enviados == 0:
+                            bot.edit_message_text(chat_id=call.message.chat.id, message_id=call.message.message_id, text=texto_actual, parse_mode="Markdown")
+                        else:
+                            bot.send_message(call.message.chat.id, texto_actual, parse_mode="Markdown")
                         texto_actual = linea
                         mensajes_enviados += 1
-                    else: texto_actual += linea
-                else: count_cero += 1
-            if not hay_activaciones: texto_actual += "_Nadie ha activado nada aún._\n"
-            if count_cero > 0: texto_actual += f"\n_... y {count_cero} usuarios con 0 activaciones._"
-            if mensajes_enviados == 0: bot.edit_message_text(chat_id=call.message.chat.id, message_id=call.message.message_id, text=texto_actual, reply_markup=admin_panel_keyboard(db), parse_mode="Markdown")
-            else: bot.send_message(call.message.chat.id, texto_actual, reply_markup=admin_panel_keyboard(db), parse_mode="Markdown")
+                    else:
+                        texto_actual += linea
+                else:
+                    count_cero += 1
+            
+            if not hay_activaciones:
+                texto_actual += "_Nadie ha activado nada aún._\n"
+            
+            if count_cero > 0:
+                texto_actual += f"\n_... y {count_cero} usuarios que aún tienen 0 activaciones._"
+                
+            if mensajes_enviados == 0:
+                bot.edit_message_text(chat_id=call.message.chat.id, message_id=call.message.message_id, text=texto_actual, reply_markup=admin_panel_keyboard(db), parse_mode="Markdown")
+            else:
+                bot.send_message(call.message.chat.id, texto_actual, reply_markup=admin_panel_keyboard(db), parse_mode="Markdown")
 
         elif call.data == "admin_broadcast":
             msg = bot.send_message(call.message.chat.id, "📢 Envía el mensaje que le llegará a TODOS los usuarios:")
@@ -156,7 +188,7 @@ def admin_callbacks(call):
                     bot.send_document(call.message.chat.id, doc, caption="💾 Backup BD Actual")
 
         elif call.data == "admin_restore":
-            msg = bot.send_message(call.message.chat.id, "📤 **RESTAURAR BASE DE DATOS**\n\nEnvíame el archivo `database.json`:", parse_mode="Markdown")
+            msg = bot.send_message(call.message.chat.id, "📤 **RESTAURAR BASE DE DATOS**\n\nEnvíame el archivo `database.json` directamente por aquí para restaurar todo. (¡Asegúrate de enviar el archivo correcto!)", parse_mode="Markdown")
             bot.register_next_step_handler(msg, process_restore_db)
                     
         elif call.data == "admin_export_users":
@@ -190,7 +222,6 @@ def admin_callbacks(call):
             save_db(db)
             bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=admin_panel_keyboard(db))
 
-        # --- EVENTOS DE ADMIN PARA RESELLERS ---
         elif call.data == "admin_reseller_menu":
             bot.edit_message_text(chat_id=call.message.chat.id, message_id=call.message.message_id, text="💼 **Gestión de Revendedores**\n\nAquí puedes autorizar a otros usuarios a vender cupones por ti a cambio de créditos.", reply_markup=admin_reseller_keyboard(), parse_mode="Markdown")
 
@@ -211,48 +242,63 @@ def admin_callbacks(call):
         bot.answer_callback_query(call.id, "❌ Error en el panel.")
         print(e)
 
-# --- FUNCIONES DE SOPORTE ADMIN ---
-
 def _edit_plan_limit(message, plan_type):
     try:
         new_limit = int(message.text.strip())
-        db = init_db(); db['plans'][plan_type]['daily_limit'] = new_limit; save_db(db)
-        bot.reply_to(message, f"✅ Límite {plan_type.upper()} actualizado a: `{new_limit}` por día.", parse_mode="Markdown")
-    except: bot.reply_to(message, "❌ Envía un número válido.")
+        db = init_db()
+        db['plans'][plan_type]['daily_limit'] = new_limit
+        save_db(db)
+        bot.reply_to(message, f"✅ Límite para el plan **{plan_type.upper()}** actualizado a: `{new_limit}` por día.", parse_mode="Markdown")
+    except:
+        bot.reply_to(message, "❌ Por favor, envía un número entero válido.")
 
 def process_create_coupon(message):
     try:
         days = int(message.text.strip())
-        db = init_db(); code = generate_coupon_code(days)
-        db['coupons'][code] = {'days': days}; save_db(db)
-        bot.reply_to(message, f"✅ **CUPÓN GENERADO**\n\n🎟️ Código: `{code}`\n⏳ Duración: {days} días VIP", parse_mode="Markdown")
-    except: bot.reply_to(message, "❌ Envía un número de días válido.")
+        db = init_db()
+        code = generate_coupon_code(days)
+        db['coupons'][code] = {'days': days}
+        save_db(db)
+        bot.reply_to(message, f"✅ **CUPÓN GENERADO**\n\n🎟️ Código: `{code}`\n⏳ Duración: {days} días VIP\n\nPuedes vender o enviar este código al cliente.", parse_mode="Markdown")
+    except:
+        bot.reply_to(message, "❌ Por favor, envía un número de días válido.")
 
 def process_manage_user(message):
-    uid = message.text.strip(); db = init_db()
+    uid = message.text.strip()
+    db = init_db()
     if uid in db['user_profiles']:
         user_data = db['user_profiles'][uid]
         acts = user_data.get('activations', 0)
-        texto = f"👤 Usuario @{user_data.get('username')}.\n📈 **Activaciones:** {acts}\n\nEscribe `VIP 30` para darle 30 días VIP.\nEscribe `FREE` para quitarle el VIP."
+        
+        texto = f"👤 Usuario @{user_data.get('username')}.\n"
+        texto += f"📈 **Activaciones totales hechas por este usuario:** {acts}\n\n"
+        texto += "Escribe `VIP 30` para darle 30 días VIP.\nEscribe `FREE` para quitarle el VIP."
+        
         msg = bot.reply_to(message, texto, parse_mode="Markdown")
         bot.register_next_step_handler(msg, lambda m: process_manage_user_action(m, uid))
-    else: bot.reply_to(message, "❌ ID no encontrada.")
+    else:
+        bot.reply_to(message, "❌ ID no encontrada.")
 
 def process_manage_user_action(message, uid):
-    text = message.text.strip().upper().split(); db = init_db()
+    text = message.text.strip().upper().split()
+    db = init_db()
     try:
         action = text[0]
         if action == "VIP":
-            amount = int(text[1]); new_expiry = datetime.now() + timedelta(days=amount)
-            db['user_profiles'][uid]['plan'] = 'vip'; db['user_profiles'][uid]['vip_expiry'] = new_expiry.strftime("%Y-%m-%d %H:%M:%S")
+            amount = int(text[1])
+            new_expiry = datetime.now() + timedelta(days=amount)
+            db['user_profiles'][uid]['plan'] = 'vip'
+            db['user_profiles'][uid]['vip_expiry'] = new_expiry.strftime("%Y-%m-%d %H:%M:%S")
             bot.reply_to(message, f"✅ Usuario {uid} convertido a VIP por {amount} días.")
             try: bot.send_message(uid, f"🎁 **¡El Administrador te ha activado {amount} días VIP!**")
             except: pass
         elif action == "FREE":
-            db['user_profiles'][uid]['plan'] = 'free'; db['user_profiles'][uid]['vip_expiry'] = None
+            db['user_profiles'][uid]['plan'] = 'free'
+            db['user_profiles'][uid]['vip_expiry'] = None
             bot.reply_to(message, f"✅ Usuario {uid} degradado a plan Gratis.")
         save_db(db)
-    except: bot.reply_to(message, "❌ Formato incorrecto.")
+    except:
+        bot.reply_to(message, "❌ Formato incorrecto.")
 
 def process_add_reseller(message):
     try:
@@ -265,7 +311,7 @@ def process_add_reseller(message):
         else: db['resellers'][uid]['credits'] += credits
         save_db(db)
         bot.reply_to(message, f"✅ **Revendedor Actualizado**\n\nEl usuario `{uid}` tiene ahora **{db['resellers'][uid]['credits']} créditos**.", parse_mode="Markdown")
-        try: bot.send_message(int(uid), "💼 **¡Has recibido créditos de Revendedor!**\nYa puedes acceder a tu panel de reventa.", parse_mode="Markdown")
+        try: bot.send_message(int(uid), "💼 **¡Has recibido créditos de Revendedor!**\nYa puedes acceder a tu panel de reventa enviando el comando /reseller", parse_mode="Markdown")
         except: pass
     except:
         bot.reply_to(message, "❌ Formato incorrecto. Debes enviar: ID CRÉDITOS")
@@ -289,14 +335,16 @@ def manage_actions(call):
         msg = bot.send_message(call.message.chat.id, "Envía la ID del nuevo admin:")
         bot.register_next_step_handler(msg, lambda m: _add_admin(m))
     elif call.data == "ban_user":
-        msg = bot.send_message(call.message.chat.id, "Envía la ID a bloquear:")
+        msg = bot.send_message(call.message.chat.id, "Envía la ID del usuario a bloquear:")
         bot.register_next_step_handler(msg, lambda m: _ban_unban(m, True))
     elif call.data == "unban_user":
-        msg = bot.send_message(call.message.chat.id, "Envía la ID a perdonar:")
+        msg = bot.send_message(call.message.chat.id, "Envía la ID del usuario a perdonar:")
         bot.register_next_step_handler(msg, lambda m: _ban_unban(m, False))
 
 def _add_admin(m):
-    try: db = init_db(); db['admins'].append(int(m.text.strip())); save_db(db); bot.reply_to(m, "✅ Admin añadido.")
+    try:
+        db = init_db(); db['admins'].append(int(m.text.strip())); save_db(db)
+        bot.reply_to(m, "✅ Admin añadido con éxito.")
     except: pass
 
 def _ban_unban(m, ban):
@@ -313,16 +361,20 @@ def _ban_unban(m, ban):
 
 def process_add_cookie_country(m):
     country = m.text.strip().capitalize()
-    msg = bot.send_message(m.chat.id, "🍪 Pega el texto (JSON o Checker/Netscape):")
+    msg = bot.send_message(m.chat.id, "🍪 Pega el texto (JSON o formato Checker/Netscape):")
     bot.register_next_step_handler(msg, lambda x: process_add_cookie_data(x, country))
 
 def process_add_cookie_data(message, country):
     data = message.text.strip()
-    try: cookies = json.loads(data)
-    except: cookies = parse_netscape_cookies(data)
+    try: 
+        cookies = json.loads(data)
+    except: 
+        cookies = parse_netscape_cookies(data)
+        
     if cookies:
-        db = init_db(); db['cookies_list'].append({'country': country, 'data': json.dumps(cookies) if isinstance(cookies, list) else cookies, 'uses': 0, 'status': 'active'})
-        save_db(db); bot.reply_to(message, "✅ Cookie guardada con éxito.")
+        db = init_db()
+        db['cookies_list'].append({'country': country, 'data': json.dumps(cookies) if isinstance(cookies, list) else cookies, 'uses': 0, 'status': 'active'})
+        save_db(db); bot.reply_to(message, "✅ Cookie guardada con éxito en la bóveda.")
     else: bot.reply_to(message, "❌ Error de formato.")
 
 def process_bulk_country(m):
@@ -332,37 +384,59 @@ def process_bulk_country(m):
 
 def process_bulk_data(m, c):
     try:
-        data = json.loads(m.text.strip()); db = init_db(); added = 0
+        data = json.loads(m.text.strip())
+        db = init_db(); added = 0
         for arr in data:
             db['cookies_list'].append({'country': c, 'data': json.dumps(arr), 'uses': 0, 'status': 'active'})
             added += 1
         save_db(db); bot.reply_to(m, f"✅ Lote importado: {added} cuentas nuevas.")
-    except: bot.reply_to(m, "❌ Error importando.")
+    except: bot.reply_to(m, "❌ Error importando. Asegúrate de que es un JSON válido.")
 
 def process_broadcast(message):
     if not message.text:
-        bot.reply_to(message, "❌ El mensaje debe ser texto.")
+        bot.reply_to(message, "❌ El mensaje debe ser de texto.")
         return
-    db = init_db(); count = 0
-    bot.reply_to(message, "⏳ Enviando masivo...")
+
+    db = init_db()
+    count = 0
+    bot.reply_to(message, "⏳ Enviando masivo... Esto puede tardar un poco dependiendo del número de usuarios.")
     for uid in db.get('user_profiles', {}).keys():
         try: 
-            bot.send_message(int(uid), f"🔔 **MENSAJE DEL ADMINISTRADOR** 🔔\n\n{message.text}", parse_mode="Markdown"); time.sleep(0.05); count += 1
-        except: 
-            try: bot.send_message(int(uid), f"🔔 MENSAJE DEL ADMINISTRADOR 🔔\n\n{message.text}"); time.sleep(0.05); count += 1
+            bot.send_message(int(uid), f"🔔 **MENSAJE DEL ADMINISTRADOR** 🔔\n\n{message.text}", parse_mode="Markdown")
+            time.sleep(0.05)
+            count += 1
+        except Exception: 
+            try:
+                bot.send_message(int(uid), f"🔔 MENSAJE DEL ADMINISTRADOR 🔔\n\n{message.text}")
+                time.sleep(0.05)
+                count += 1
             except: pass
-    bot.send_message(message.chat.id, f"✅ Recibido por {count} usuarios.")
+    bot.send_message(message.chat.id, f"✅ Mensaje completado. Recibido exitosamente por {count} usuarios.")
 
 def process_restore_db(message):
-    if not message.document or not message.document.file_name.endswith('.json'):
-        bot.reply_to(message, "❌ Debes enviar un archivo `.json`."); return
+    if not message.document:
+        bot.reply_to(message, "❌ Debes enviar un archivo adjunto. Operación cancelada.")
+        return
+
+    if not message.document.file_name.endswith('.json'):
+        bot.reply_to(message, "❌ El archivo debe ser `.json`. Operación cancelada.")
+        return
+
     try:
-        bot.reply_to(message, "⏳ Instalando base de datos en RAM...")
+        bot.reply_to(message, "⏳ Procesando e instalando la base de datos...")
         file_info = bot.get_file(message.document.file_id)
         downloaded_file = bot.download_file(file_info.file_path)
+
         new_db = json.loads(downloaded_file.decode('utf-8'))
-        if 'user_profiles' not in new_db: bot.reply_to(message, "❌ Archivo inválido."); return
+
+        if 'user_profiles' not in new_db or 'cookies_list' not in new_db:
+            bot.reply_to(message, "❌ El archivo JSON no tiene la estructura válida para este bot.")
+            return
+
         db = init_db()
-        db.clear(); db.update(new_db); save_db(db)
-        bot.reply_to(message, "✅ **¡BASE DE DATOS RESTAURADA CON ÉXITO!**", parse_mode="Markdown")
-    except Exception as e: bot.reply_to(message, f"❌ Error: {str(e)}")
+        db.clear()
+        db.update(new_db)
+        save_db(db) 
+        bot.reply_to(message, "✅ **¡BASE DE DATOS RESTAURADA CON ÉXITO!**\n\nTodos los usuarios, referidos, planes VIP, cookies y configuraciones se han recuperado y aplicado al sistema al instante.", parse_mode="Markdown")
+    except Exception as e:
+        bot.reply_to(message, f"❌ Error al restaurar la base de datos: {str(e)}")
