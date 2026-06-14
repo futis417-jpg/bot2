@@ -1,5 +1,24 @@
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 
+## ==========================================
+# 🧑‍💻 TECLADOS DE USUARIO (RECUPERADOS PARA EVITAR CRASHEO)
+# ==========================================
+def main_user_keyboard(*args, **kwargs):
+    # Nota: Si tenías otros textos en tus botones originales, puedes cambiarlos aquí.
+    markup = InlineKeyboardMarkup(row_width=2)
+    markup.add(InlineKeyboardButton("🎬 Obtener Cuenta", callback_data="get_account"))
+    markup.add(InlineKeyboardButton("👤 Mi Perfil", callback_data="profile"), InlineKeyboardButton("💎 Plan VIP", callback_data="vip"))
+    return markup
+
+def countries_keyboard(*args, **kwargs):
+    markup = InlineKeyboardMarkup(row_width=2)
+    markup.add(InlineKeyboardButton("🌍 Cuenta Aleatoria", callback_data="country_any"))
+    markup.add(InlineKeyboardButton("🔙 Volver", callback_data="back_main"))
+    return markup
+
+## ==========================================
+# 👑 TECLADOS DE ADMINISTRADOR (Con Botón de Revendedores y Restaurar BD)
+# ==========================================
 def admin_panel_keyboard(db):
     markup = InlineKeyboardMarkup(row_width=2)
     markup.add(InlineKeyboardButton("➕ Añadir Cookie", callback_data="admin_add_cookie"), InlineKeyboardButton("📥 Importar Lote", callback_data="admin_bulk_import"))
@@ -10,22 +29,24 @@ def admin_panel_keyboard(db):
     markup.add(InlineKeyboardButton("📢 Mensaje Masivo", callback_data="admin_broadcast"), InlineKeyboardButton("🛡️ Panel Baneos", callback_data="admin_bans"))
     markup.add(InlineKeyboardButton("📄 Exportar BD", callback_data="admin_backup"), InlineKeyboardButton("📤 Restaurar BD", callback_data="admin_restore"))
     markup.add(InlineKeyboardButton("📄 Exportar Usuarios", callback_data="admin_export_users"), InlineKeyboardButton("🧹 Limpiar Agotadas", callback_data="admin_clear_dead_cookies"))
-    # NUEVO BOTON PARA GESTIONAR RESELLERS
+    
+    # AQUÍ ESTÁ EL BOTÓN DE REVENDEDORES
     markup.add(InlineKeyboardButton("💼 Gestión Resellers", callback_data="admin_reseller_menu"), InlineKeyboardButton("⚙️ Forzar Limpieza", callback_data="admin_clear_cache"))
     
     maint_text = "🔴 Quitar Mantenimiento" if db.get('maintenance_mode', False) else "🟢 Poner Mantenimiento"
     markup.add(InlineKeyboardButton(maint_text, callback_data="admin_toggle_maint"))
     return markup
 
-def admin_plans_keyboard(db):
+#def admin_plans_keyboard(db):
     markup = InlineKeyboardMarkup()
     markup.add(InlineKeyboardButton("✏️ Editar Límite Gratis", callback_data="admin_edit_plan_free"))
     markup.add(InlineKeyboardButton("✏️ Editar Límite VIP", callback_data="admin_edit_plan_vip"))
     markup.add(InlineKeyboardButton("🔙 Volver", callback_data="admin_back_panel"))
     return markup
 
-# --- NUEVOS TECLADOS PARA EL SISTEMA RESELLER ---
-
+## ==========================================
+# 💼 TECLADOS DE REVENDEDORES (RESELLERS)
+# ==========================================
 def admin_reseller_keyboard():
     markup = InlineKeyboardMarkup(row_width=2)
     markup.add(InlineKeyboardButton("➕ Añadir/Dar Créditos", callback_data="admin_reseller_add"))
